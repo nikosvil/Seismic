@@ -14,14 +14,13 @@ call inter-stage conditioning.
 
 For the software and hardware needed, please read [REQUIREMENTS.md](REQUIREMENTS.md).
 
-## What is here, and what is not
+## What is here
 
 The repository contains **code only**. The trained networks and the generated
-datasets are not uploaded, because they are too large for a git repository: one
+datasets are not uploaded because they are too large for a git repository: one
 trained model is about 55 MB and one dataset is about 3.5 GB.
 
-This is not a loss of reproducibility. The datasets are produced by the
-generator scripts included here, and every run uses a fixed random seed,
+The datasets are produced by the generator scripts included here, and every run uses a fixed random seed,
 `rng(42, 'twister')`. Running the generator and then the training script
 reproduces the models of the paper.
 
