@@ -69,8 +69,8 @@ reflectivity series, convolves them with the band wavelets and saves the result.
 
 **2. Split into training, validation and test sets.**
 Run `common/split_train_val_test.m`. The split is by reflectivity group, so no
-reflectivity series appears in more than one set. The result is 22 500 training,
-3 000 validation and 4 500 test traces.
+reflectivity series appears in more than one set. The result is 22500 training,
+3000 validation and 4500 test traces.
 
 **3. Train.**
 Run the `train_*.m` script inside the model folder. It writes the trained
@@ -111,7 +111,7 @@ see. It follows from the kernel lengths:
 - with the head convolutions dilated by 4: 1390 samples, which is 13.90 ms
 
 The UHRS wavelet at 500 Hz is 1000 samples long, that is 10.0 ms. A receptive
-field of 7.96 ms therefore does not cover it, and 13.90 ms does. This is the
+field of 7.96 ms therefore does not cover it while 13.90 ms does. This is the
 main result of Section 3.2.
 
 ## Citation
