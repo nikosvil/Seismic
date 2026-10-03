@@ -54,5 +54,3 @@ trace at 2001 samples in single precision:
 
 - `dataset_train_val_test_UHS.mat` is about 3.5 GB
 - the equivalent Ricker dataset is of the same order
-
-Please make sure the disk has room before running the generator.
