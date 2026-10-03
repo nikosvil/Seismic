@@ -17,29 +17,44 @@ For the software and hardware needed, please read [REQUIREMENTS.md](REQUIREMENTS
 ## What is here
 
 The repository contains **code only**. The trained networks and the generated
-datasets are not uploaded because they are too large for a git repository: one
+datasets are not uploaded as they are too large for a git repository: one
 trained model is about 55 MB and one dataset is about 3.5 GB.
 
 The datasets are produced by the generator scripts included here, and every run uses a fixed random seed,
-`rng(42, 'twister')`. Running the generator and then the training script
-reproduces the models of the paper.
+`rng(42, 'twister')`. Running the generator and then the training script reproduces the models of the paper.
 
 ## The seven models
 
-The paper compares seven trained models. Each one has its own folder.
+The paper compares seven trained models. Six of them have their own training
+script while the seventh differs only in the data it was trained on, therefore it has no
+folder of its own. More is explained below the table.
 
-| Folder | Wavelet | Conditioning | Head receptive field | Where it appears in the paper |
+| Training script | Wavelet | Conditioning | Head receptive field | Where it appears in the paper |
 | --- | --- | --- | --- | --- |
 | `UHRS/Progressive/progressive` | UHRS, symmetric | yes | 7.96 ms | Tables 2, 3, 5 |
 | `UHRS/Progressive/progressive_matchedRF` | UHRS, symmetric | yes | 13.90 ms | Tables 1, 2, 4, 5; Figs. 3, 6 |
 | `UHRS/Multihead/multihead` | UHRS, symmetric | no | 7.96 ms | Tables 2, 5 |
 | `UHRS/Multihead/multihead_matchedRF` | UHRS, symmetric | no | 13.90 ms | Tables 2, 4, 5; Figs. 3, 7 |
-| `UHRS/Initial_wavelet` | UHRS, initial | yes | 7.96 ms | Table 3 |
 | `Ricker/Progressive` | Ricker | yes | 7.96 ms | Table 1; Figs. 2, 5 |
 | `Ricker/Multihead` | Ricker | no | 7.96 ms | Fig. 2, Section 3.2 |
 
 The four UHRS models with the symmetric wavelet form the two-by-two design of
 Section 3.2: conditioning present or absent, receptive field 7.96 or 13.90 ms.
+
+### The seventh model: the initial wavelet of Table 3
+
+Table 3 compares the symmetric UHRS wavelet against the initial one whose
+Gaussian window does not reach zero at its edges. The two models use the **same
+architecture and the same training script**. They differ only in the data, that
+is in which generator was used to build the dataset. The training scripts load
+`dataset_train_val_test_UHS.mat` by name, not knowing which wavelet is inside
+it.
+
+To reproduce the initial-wavelet column of Table 3:
+
+1. build the dataset with `common/reflectivity_generator_UHS_initial.m`
+2. split it with `common/split_train_val_test_UHS.m`,
+3. train with `UHRS/Progressive/progressive/train_progressive_multioutput.m`.
 
 "Conditioning" means the quota gates, `C_quota = 8` with `detachUpTo = 3`. Where
 it is absent, `C_quota = 0` and there is no gradient detachment. The wider
@@ -49,15 +64,22 @@ receptive field is obtained by dilating the two head convolutions by a factor of
 ## Repository layout
 
 ```
-common/            wavelet and reflectivity generators, train/val/test split
+common/            reflectivity and wavelet generators, train/val/test split
+  reflectivity_generator_Ricker.m                      Ricker family
+  reflectivity_generator_UHS_symmHighestFreq_newUHS.m  UHRS, symmetric
+  reflectivity_generator_UHS_initial.m                 UHRS, initial (Table 3)
+  split_train_val_test_Ricker.m
+  split_train_val_test_UHS.m
 Ricker/            the two Ricker models
-UHRS/              the five UHRS models
+UHRS/              the four UHRS models of the two-by-two design
 inference/         in-domain and finite difference inference scripts
 robustness/        the wavelet, noise and out-of-distribution test suite
-ablations/         the four further sweeps of Section 3.3
-fd_modelling/      1-D finite difference forward code and velocity model
-figures/           scripts that draw the figures of the paper
+ablations/         the four further sweeps of Section 3.3 (Packs 2 to 5)
+figures/           script that draws Figs. 2 and 3
 ```
+
+The two split scripts are not interchangeable: each one knows the variable
+names its own generator writes.
 
 ## How to reproduce a result
 
@@ -68,9 +90,10 @@ Run the generator in `common/` for the wavelet family you want. This writes the
 reflectivity series, convolves them with the band wavelets and saves the result.
 
 **2. Split into training, validation and test sets.**
-Run `common/split_train_val_test.m`. The split is by reflectivity group, so no
-reflectivity series appears in more than one set. The result is 22500 training,
-3000 validation and 4500 test traces.
+Run `common/split_train_val_test_Ricker.m` or `common/split_train_val_test_UHS.m`,
+depending on the family. The split is by reflectivity group, so no reflectivity
+series appears in more than one set. The result is 22 500 training, 3 000
+validation and 4 500 test traces.
 
 **3. Train.**
 Run the `train_*.m` script inside the model folder. It writes the trained
@@ -83,7 +106,9 @@ the per-band RMSE and the per-trace correlations of Tables 1 and 2.
 
 **5. Evaluate on the finite difference record.**
 Run the matching `infer_real_data_*.m` script. This produces Tables 4 and 5 and
-Figs. 5, 6 and 7.
+Figs. 5, 6 and 7. The record itself, `basepingkmat_unno.mat`, is a `.mat` file
+and is therefore not in this repository. How it was made is described in the
+next section.
 
 Please note the normalization rule described in Section 2.4 of the paper: at
 deployment the whole record must be scaled by **one common factor** for all
@@ -100,6 +125,27 @@ write a summary text file with the composite robustness index.
 `figures/make_overlay_figures.py` draws Figs. 2 and 3. The finite difference
 figures are drawn by the inference scripts.
 
+## The finite difference record
+
+The cross-physics test of Section 4 uses a record produced by a 1-D acoustic
+finite difference simulation, with fourth-order staggered spatial derivatives
+and fourth-order Adams-Bashforth time integration.
+
+That forward code is not redistributed here. It is the work of Florian Wittkamp
+and is released under the GNU General Public License v3. It is described in -and is also available from-
+the reference cited in Section 4.1 of the paper:
+
+> Bohlen, T. and Wittkamp, F., 2016. Three-dimensional viscoelastic time-domain
+> finite-difference seismic modelling using the staggered Adams-Bashforth time
+> integrator. Geophysical Journal International, 204 (3), 1781-1788.
+
+The simulation used for the paper has a source and a receiver at the same grid
+point, a pressure-free boundary at both ends of the 20 m model, dt = 5.5339e-07 s
+and a total time of 0.018 s, resampled afterwards to dt = 1e-5 s and zero-padded
+to 2001 samples. The velocity model is the one shown in Fig. 4 of the paper.
+Anyone who wishes to repeat the test can reproduce the record from that
+description together with the reference above.
+
 ## A note on the receptive field
 
 The receptive field is the length of input trace that one output sample can
@@ -111,7 +157,7 @@ see. It follows from the kernel lengths:
 - with the head convolutions dilated by 4: 1390 samples, which is 13.90 ms
 
 The UHRS wavelet at 500 Hz is 1000 samples long, that is 10.0 ms. A receptive
-field of 7.96 ms therefore does not cover it while 13.90 ms does. This is the
+field of 7.96 ms therefore does not cover it, and 13.90 ms does. This is the
 main result of Section 3.2.
 
 ## Citation
