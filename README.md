@@ -23,38 +23,21 @@ trained model is about 55 MB and one dataset is about 3.5 GB.
 The datasets are produced by the generator scripts included here, and every run uses a fixed random seed,
 `rng(42, 'twister')`. Running the generator and then the training script reproduces the models of the paper.
 
-## The seven models
+## The six models
 
-The paper compares seven trained models. Six of them have their own training
-script while the seventh differs only in the data it was trained on, therefore it has no
-folder of its own. More is explained below the table.
+The paper compares six trained models, each with its own training script.
 
 | Training script | Wavelet | Conditioning | Head receptive field | Where it appears in the paper |
 | --- | --- | --- | --- | --- |
-| `UHRS/Progressive/progressive` | UHRS, symmetric | yes | 7.96 ms | Tables 2, 3, 5 |
-| `UHRS/Progressive/progressive_matchedRF` | UHRS, symmetric | yes | 13.90 ms | Tables 1, 2, 4, 5; Figs. 3, 6 |
-| `UHRS/Multihead/multihead` | UHRS, symmetric | no | 7.96 ms | Tables 2, 5 |
-| `UHRS/Multihead/multihead_matchedRF` | UHRS, symmetric | no | 13.90 ms | Tables 2, 4, 5; Figs. 3, 7 |
+| `UHRS/Progressive/progressive` | UHRS | yes | 7.96 ms | Tables 2, 4 |
+| `UHRS/Progressive/progressive_matchedRF` | UHRS | yes | 13.90 ms | Tables 1, 2, 3, 4; Figs. 3, 6 |
+| `UHRS/Multihead/multihead` | UHRS | no | 7.96 ms | Tables 2, 4 |
+| `UHRS/Multihead/multihead_matchedRF` | UHRS | no | 13.90 ms | Tables 2, 3, 4; Figs. 3, 7 |
 | `Ricker/Progressive` | Ricker | yes | 7.96 ms | Table 1; Figs. 2, 5 |
 | `Ricker/Multihead` | Ricker | no | 7.96 ms | Fig. 2, Section 3.2 |
 
-The four UHRS models with the symmetric wavelet form the two-by-two design of
-Section 3.2: conditioning present or absent, receptive field 7.96 or 13.90 ms.
-
-### The seventh model: the initial wavelet of Table 3
-
-Table 3 compares the symmetric UHRS wavelet against the initial one whose
-Gaussian window does not reach zero at its edges. The two models use the **same
-architecture and the same training script**. They differ only in the data, that
-is in which generator was used to build the dataset. The training scripts load
-`dataset_train_val_test_UHS.mat` by name, not knowing which wavelet is inside
-it.
-
-To reproduce the initial-wavelet column of Table 3:
-
-1. build the dataset with `common/reflectivity_generator_UHS_initial.m`
-2. split it with `common/split_train_val_test_UHS.m`,
-3. train with `UHRS/Progressive/progressive/train_progressive_multioutput.m`.
+The four UHRS models form the two-by-two design of Section 3.2: conditioning
+present or absent, receptive field 7.96 or 13.90 ms.
 
 "Conditioning" means the quota gates, `C_quota = 8` with `detachUpTo = 3`. Where
 it is absent, `C_quota = 0` and there is no gradient detachment. The wider
@@ -65,21 +48,25 @@ receptive field is obtained by dilating the two head convolutions by a factor of
 
 ```
 common/            reflectivity and wavelet generators, train/val/test split
-  reflectivity_generator_Ricker.m                      Ricker family
-  reflectivity_generator_UHS_symmHighestFreq_newUHS.m  UHRS, symmetric
-  reflectivity_generator_UHS_initial.m                 UHRS, initial (Table 3)
+  reflectivity_generator_Ricker.m          Ricker family
+  reflectivity_generator_UHRS_symmetric.m  UHRS family
   split_train_val_test_Ricker.m
-  split_train_val_test_UHS.m
+  split_train_val_test_UHRS.m
 Ricker/            the two Ricker models
 UHRS/              the four UHRS models of the two-by-two design
-inference/         in-domain and finite difference inference scripts
+inference/         in-domain and finite difference inference scripts,
+                   and phase_metrics.py for the timing diagnostics
 robustness/        the wavelet, noise and out-of-distribution test suite
-ablations/         the four further sweeps of Section 3.3 (Packs 2 to 5)
-figures/           script that draws Figs. 2 and 3
+ablations/         Pack 1, the robustness comparison of the progressive model
+                   against the multi-head baseline behind Section 3.2, and the
+                   four further sweeps of Section 3.3 (Packs 2 to 5),
+                   summarised in the supplementary material of the paper
+figures/           scripts that draw Figs. 2, 3, 5, 6 and 7
 ```
 
 The two split scripts are not interchangeable: each one knows the variable
-names its own generator writes.
+names its own generator writes, and each reads the file its own generator
+produces, `dataset_multi_freq_Ricker.mat` or `dataset_multi_freq_UHRS.mat`.
 
 ## How to reproduce a result
 
@@ -90,7 +77,7 @@ Run the generator in `common/` for the wavelet family you want. This writes the
 reflectivity series, convolves them with the band wavelets and saves the result.
 
 **2. Split into training, validation and test sets.**
-Run `common/split_train_val_test_Ricker.m` or `common/split_train_val_test_UHS.m`,
+Run `common/split_train_val_test_Ricker.m` or `common/split_train_val_test_UHRS.m`,
 depending on the family. The split is by reflectivity group, so no reflectivity
 series appears in more than one set. The result is 22 500 training, 3 000
 validation and 4 500 test traces.
@@ -105,7 +92,7 @@ Run the matching `infer_*_multioutput.m` script in `inference/`. This produces
 the per-band RMSE and the per-trace correlations of Tables 1 and 2.
 
 **5. Evaluate on the finite difference record.**
-Run the matching `infer_real_data_*.m` script. This produces Tables 4 and 5 and
+Run the matching `infer_real_data_*.m` script. This produces Tables 3 and 4 and
 Figs. 5, 6 and 7. The record itself, `basepingkmat_unno.mat`, is a `.mat` file
 and is therefore not in this repository. How it was made is described in the
 next section.
@@ -116,14 +103,33 @@ eleven traces. If each trace is normalized separately, the amplitude relations
 between the bands are destroyed and the predicted amplitudes will be wrong. The
 inference scripts already do this correctly.
 
-**6. Robustness tests (optional).**
+**6. Phase diagnostics (optional).**
+`inference/phase_metrics.py` recomputes the lag, the instantaneous phase
+difference and the RRMSE before and after a single scalar rescaling, which
+are the quantities quoted in Sections 2.8, 4.3 and 5. It reads the
+`predictions_real_data_*.mat` files written in step 5.
+
+**7. Robustness tests (optional).**
 Run the scripts in `robustness/`. They cover the wavelet perturbations, the
 noise levels and the out-of-distribution reflectivity of Section 3.4, and they
 write a summary text file with the composite robustness index.
 
-**7. Figures.**
-`figures/make_overlay_figures.py` draws Figs. 2 and 3. The finite difference
-figures are drawn by the inference scripts.
+**8. Figures.**
+`figures/make_overlay_figures.py` draws Figs. 2 and 3, the in-domain test-trace
+overlays. `figures/make_fd_figures.py` draws Figs. 5, 6 and 7, the cross-physics
+reconstructions. Both read the `.mat` files written by the inference scripts, so
+run step 4 or step 5 first; set `DATA_ROOT` at the top of each script to the
+folder that holds the `Ricker Final` and `UHRS Final` trees. `FIG_OUT` chooses
+where the figures are written and `FIG_FORMAT` chooses the format: `png` by
+default, or `pdf` and `eps` for vector output, which is what a publisher asks
+for with line art.
+
+The inference scripts themselves also write a plain figure of predictions
+against ground truth, as a quick check while running. Those are not the figures
+of the paper.
+
+Fig. 1 is a drawn diagram and Fig. 4 is produced by the finite difference
+forward code, so neither is generated by this repository.
 
 ## The finite difference record
 

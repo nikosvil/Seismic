@@ -1,0 +1,337 @@
+% Title: infer_real_data_Ricker_multihead.m
+% Author: N. D. Vilanakis
+%
+% A progressive multi-output 1-D convolutional network for low frequency
+% seismic trace reconstruction
+% N. D. Vilanakis, N. Economou, A. Vafidis
+% Computers and Geosciences
+%
+% User guide
+%   Purpose : Applies the trained network to the finite difference record, that
+%             is to data produced by a different forward physics from the one
+%             used in training. This is the cross-physics test of Section 4.
+%   Inputs  : the trained network, and basepingkmat_unno.mat, the finite
+%             difference record. The record is normalized by ONE common factor
+%             for all eleven traces, as required by Section 2.4. Normalizing
+%             each trace separately destroys the amplitude relations between
+%             the bands and gives wrong amplitudes.
+%   Outputs : predictions_real_data_Ricker_multihead.mat, holding YPred, Y_true, X_in, t and targetHz,
+%             and a figure comparing prediction against truth band by band.
+
+%% ------------------------------------------------------------------------
+%  MULTI-HEAD variant, adapted from the progressive script of the same name.
+%
+%  The multi-head model is saved with C_quota = 0 and quotaNets = cell(10,1)
+%  whose entries are all EMPTY. The progressive script calls
+%      predict(quotaNets{s}, ...)
+%  for every stage s > 1, which errors on an empty network. The prediction
+%  loop below therefore guards with
+%      if s == 1 || isempty(quotaNets{s})
+%  which is the same test used by eval_net() in robustness_tests_pack1_*.m,
+%  so a multi-head model simply takes the encoder features at every stage.
+%
+%  Everything else — normalisation, dlarray layout, denormalisation, windows,
+%  metrics — is unchanged from the progressive script, so the two sets of
+%  numbers are directly comparable.
+%% ------------------------------------------------------------------------
+
+%% infer_real_data_Ricker.m
+% Inference + validation on a real multi-frequency record using the
+% multi-head multi-output CNN trained on the Ricker wavelet dataset.
+%
+% INPUT FILE: baserickmat.mat  — variable 'baserickmat' [2001 x 11]
+%   Column 1      : HF input trace (6400 Hz)
+%   Columns 2..11 : ground-truth LF traces, in stage order
+%                   [5500 4500 3300 2600 2000 1500 1100 800 600 500] Hz
+%
+% The HF column is fed to the network; the 10 predicted LF bands are
+% compared against columns 2..11. Per-frequency error is reported over the
+% time window t in [0.005, 0.01] s.
+%
+% NOTE: This data is in the SAME domain as the training set, so the model's
+% own training normalization (muX/sigX in, muY/sigY out) is used directly --
+% NO per-trace standardization (that was only for unknown-scale real traces).
+
+clear; clc; close all;
+
+%% ========================= PATHS ========================================
+modelFile = 'CNN_multihead_multioutput_Ricker.mat';
+inputFile = 'baserickmat2.mat';   % globally-normalized FD record
+if ~isfile(inputFile)   % not copied into this folder; use the Progressive copy
+    inputFile = fullfile('..','Progressive','baserickmat2.mat');
+end
+inputVar  = 'baserickmat';        % fallback hint; auto-detected below
+
+% AMPLITUDE-SCALE TEST (see AmpRatio undershoot):
+%   false -> plain training normalization (X-muX)/sigX. The FD input is ~0.65x
+%            training scale, so BatchNorm (fixed train stats) sees an off-scale
+%            input and may under-respond.
+%   true  -> scale the input UP to training std first (so BN sees std~1), then
+%            divide predictions back down by the same gain. Linear round-trip:
+%            if AmpRatio improves, the undershoot was a BN/scale artifact;
+%            if not, it is a genuine FD domain shift.
+standardizeInput = true;   % unnormalized FD data: bring input to training scale
+
+%% ========================= ERROR WINDOWS ================================
+tWin    = [0.005 0.01];   % coda window — original request
+mainWin = [0     0.005];  % primary-event window (opens at t=0 so it captures
+                          % the fastest band, whose primary arrives earliest)
+
+%% ========================= LOAD TRAINED MODEL ============================
+fprintf('Loading trained multi-head model from: %s\n', modelFile);
+model = load(modelFile, ...
+    'encNet', 'headNets', 'quotaNets', ...
+    'muX', 'sigX', 'muY', 'sigY', ...
+    'targetHz', 'targetVarIdx', 'nStages', 'C_quota', 'detachUpTo', ...
+    't', 'dt');
+
+encNet    = model.encNet;
+headNets  = model.headNets;
+quotaNets = model.quotaNets;
+muX       = model.muX;
+sigX      = model.sigX;
+muY       = model.muY;
+sigY      = model.sigY;
+targetHz  = model.targetHz;
+nStages   = model.nStages;
+t         = model.t(:);
+dt        = model.dt;
+
+fprintf('Model: %d stages, frequencies: %s Hz\n', ...
+    nStages, sprintf('%d ', targetHz));
+
+%% ========================= LOAD DATA =====================================
+fprintf('Loading data from: %s\n', inputFile);
+D  = load(inputFile);
+fn = fieldnames(D);
+M  = [];  pickedVar = '';
+for ii = 1:numel(fn)                 % auto-detect the [nt x N] matrix
+    v = D.(fn{ii});
+    if isnumeric(v) && ismatrix(v) && size(v,1) == numel(t)
+        M = double(v);  pickedVar = fn{ii};  break;
+    end
+end
+assert(~isempty(M), 'No [%d x N] matrix found in %s.', numel(t), inputFile);
+fprintf('Using variable ''%s''\n', pickedVar);
+[nt, nCol] = size(M);
+
+assert(nt == numel(t), ...
+    'Record length (%d) does not match model time axis (%d).', nt, numel(t));
+assert(nCol == nStages + 1, ...
+    'Expected %d columns (1 HF + %d LF), got %d.', nStages+1, nStages, nCol);
+
+% NOTE: these traces were generated by FINITE-DIFFERENCE modelling, NOT by
+% reflectivity (*) wavelet as in training -- this is a domain shift, so some
+% mismatch is expected even when the column mapping is correct.
+%
+% Frequency (Hz) of each file column, in column order 1..nCol.
+% Colleague's best guess: ASCENDING 500..6400 (so the 6400 Hz HF input is the
+% LAST column, not the first). Edit this one line if the order is confirmed
+% to be different.
+fileFreqOrder = [500 600 800 1100 1500 2000 2600 3300 4500 5500 6400];
+assert(numel(fileFreqOrder) == nCol, ...
+    'fileFreqOrder (%d) must match column count (%d).', numel(fileFreqOrder), nCol);
+
+% HF input = the 6400 Hz column
+hfCol = find(fileFreqOrder == 6400, 1);
+assert(~isempty(hfCol), 'No 6400 Hz column found in fileFreqOrder.');
+X_in  = M(:, hfCol);                 % [nt x 1]  HF input
+
+% LF ground truth, mapped to model stage order (targetHz)
+Y_true = zeros(nt, nStages);
+for s = 1:nStages
+    c = find(fileFreqOrder == targetHz(s), 1);
+    assert(~isempty(c), 'Target %d Hz not found in fileFreqOrder.', targetHz(s));
+    Y_true(:, s) = M(:, c);
+end
+fprintf('HF input = column %d (6400 Hz); %d LF targets mapped to stage order.\n', ...
+    hfCol, nStages);
+
+%% ========================= AMPLITUDE DIAGNOSTIC ==========================
+% Confirm the record is on the training amplitude scale (if not, errors will
+% be inflated by a global scale mismatch rather than by model inaccuracy).
+fprintf('--- Amplitude check (record vs training) ---\n');
+fprintf('  HF input : std=%.4g   (training sigX=%.4g)\n', std(X_in), sigX);
+for s = 1:nStages
+    fprintf('  %5d Hz : std=%.4g   (training sigY=%.4g)\n', ...
+        targetHz(s), std(Y_true(:,s)), sigY(s));
+end
+
+%% ========================= GPU DETECTION =================================
+useGPU = false;
+try
+    if gpuDeviceCount("available") > 0
+        useGPU = true;
+        g = gpuDevice();
+        fprintf('GPU: %s (%s)\n', g.Name, g.ComputeCapability);
+    end
+catch
+end
+
+%% ========================= NORMALIZE INPUT ===============================
+if standardizeInput
+    inGain = sigX / (std(X_in) + 1e-12);   % bring FD input up to training std
+else
+    inGain = 1;                            % plain training normalization
+end
+fprintf('Input standardization: %d  (inGain = %.3f)\n', standardizeInput, inGain);
+X_in_n = single((inGain * X_in - muX) / sigX);
+
+%% ========================= RUN INFERENCE (single trace) =================
+fprintf('Running multi-head inference...\n');
+YPred_n = zeros(nt, nStages, 'single');
+
+xb  = reshape(X_in_n.', [1, 1, nt]);   % [C=1 x B=1 x T=nt]
+dlX = dlarray(xb, 'CBT');
+if useGPU, dlX = gpuArray(dlX); end
+
+feat          = predict(encNet, dlX);
+predsForInput = cell(nStages, 1);
+for s = 1:nStages
+    if s == 1 || isempty(quotaNets{s})   % multi-head: no quota gate
+        headIn = feat;
+    else
+        prevStack = cat(1, predsForInput{1:s-1});
+        quotaOut  = predict(quotaNets{s}, prevStack);
+        headIn    = cat(1, feat, quotaOut);
+    end
+    pred             = predict(headNets{s}, headIn);
+    predsForInput{s} = pred;
+
+    pd = extractdata(pred);
+    if useGPU, pd = gather(pd); end
+    YPred_n(:, s) = squeeze(pd);
+end
+
+%% ========================= DENORMALIZE ===================================
+YPred = zeros(nt, nStages);
+for s = 1:nStages
+    YPred(:, s) = double(YPred_n(:, s)) * sigY(s) + muY(s);
+end
+% Undo the input gain so predictions return to the FD (ground-truth) scale
+YPred = YPred / inGain;
+
+%% ========================= PER-FREQUENCY ERROR (windowed) ===============
+win = find(t >= tWin(1) & t <= tWin(2));   % samples in [0.005, 0.01] s
+fprintf('\nError window: t in [%.4g, %.4g] s  (samples %d..%d, %d pts)\n', ...
+    tWin(1), tWin(2), win(1), win(end), numel(win));
+
+winMain = find(t >= mainWin(1) & t <= mainWin(2));  % primary-event window
+
+% Pearson correlation (anonymous fn — no Statistics Toolbox dependency)
+pcorr = @(a,b) sum((a(:)-mean(a)).*(b(:)-mean(b))) / ...
+               (sqrt(sum((a(:)-mean(a)).^2) * sum((b(:)-mean(b)).^2)) + 1e-12);
+
+fprintf('Primary window : t in [%.4g, %.4g] s  (%d pts)\n', mainWin(1), mainWin(2), numel(winMain));
+
+fprintf('\n%-9s | %-11s | %-9s | %-9s | %-9s | %-9s\n', ...
+    'Freq(Hz)', 'RRMSE(%)', 'AmpRatio', 'Corr win', 'Corr main', 'Corr full');
+fprintf('(AmpRatio = max|pred| / max|true| over the coda window: 1=perfect, <1=undershoot)\n');
+fprintf('%s\n', repmat('-', 1, 74));
+
+rmseW = zeros(1, nStages);
+relW  = zeros(1, nStages);
+ampR  = zeros(1, nStages);   % amplitude ratio, coda window (Section 2.8)
+corrW = zeros(1, nStages);   % coda window
+corrM = zeros(1, nStages);   % primary-event window
+corrF = zeros(1, nStages);   % full trace
+for s = 1:nStages
+    yt = Y_true(win, s);
+    yp = YPred(win, s);
+    rmseW(s) = sqrt(mean((yp - yt).^2));
+    relW(s)  = 100 * rmseW(s) / (max(yt) - min(yt) + 1e-12);
+    ampR(s)  = max(abs(YPred(win, s))) / (max(abs(Y_true(win, s))) + 1e-12);
+    corrW(s) = pcorr(yt, yp);
+    corrM(s) = pcorr(Y_true(winMain, s), YPred(winMain, s));
+    corrF(s) = pcorr(Y_true(:, s),       YPred(:, s));
+
+    fprintf('%6d    | %8.2f    | %7.3f   | %7.3f   | %7.3f   | %7.3f\n', ...
+        targetHz(s), relW(s), ampR(s), corrW(s), corrM(s), corrF(s));
+end
+fprintf('%s\n', repmat('-', 1, 74));
+fprintf('Mean      | %8.2f    | %7.3f   | %7.3f   | %7.3f   | %7.3f\n', ...
+    mean(relW), mean(ampR), mean(corrW), mean(corrM), mean(corrF));
+
+%% ========================= FIGURE: predicted vs ground truth ============
+fig = figure('Position', [50 50 1100 1500], 'Visible', 'off');
+nRow = nStages + 1;
+
+% Top panel: HF input
+subplot(nRow, 1, 1);
+plot(t, X_in, 'b-', 'LineWidth', 0.9); hold on;
+yl = ylim;
+hp = patch([tWin(1) tWin(2) tWin(2) tWin(1)], [yl(1) yl(1) yl(2) yl(2)], ...
+    [0.85 0.9 1], 'EdgeColor', 'none', 'FaceAlpha', 0.4);
+uistack(hp, 'bottom');
+ylabel('6400 Hz'); title(sprintf('HF INPUT (column %d)', hfCol), 'FontSize', 8);
+set(gca, 'FontSize', 7); grid on;
+
+% LF bands: predicted vs ground truth
+for s = 1:nStages
+    subplot(nRow, 1, s + 1);
+    h1 = plot(t, Y_true(:, s), 'k-',  'LineWidth', 0.9); hold on;
+    h2 = plot(t, YPred(:, s),  'r--', 'LineWidth', 0.9);
+    yl = ylim;
+    hp = patch([tWin(1) tWin(2) tWin(2) tWin(1)], [yl(1) yl(1) yl(2) yl(2)], ...
+        [0.85 0.9 1], 'EdgeColor', 'none', 'FaceAlpha', 0.4);
+    uistack(hp, 'bottom');   % shade behind lines; legend uses explicit handles
+    ylabel(sprintf('%d Hz', targetHz(s)));
+    title(sprintf('%d Hz  |  RRMSE = %.2f%%  (window)', targetHz(s), relW(s)), ...
+        'FontSize', 8);
+    set(gca, 'FontSize', 7); grid on;
+    if s == 1
+        legend([h1 h2 hp], ...
+            {'REAL (ground truth)', 'PREDICTED (network)', 'Error window'}, ...
+            'FontSize', 7, 'Location', 'northeast');
+    end
+end
+xlabel('Time (s)');
+sgtitle('Ricker Multi-Head — black = REAL trace,  red dashed = PREDICTED', 'FontSize', 11);
+
+exportgraphics(fig, 'real_Ricker_multihead_pred_vs_truth.png', 'Resolution', 300);
+close(fig);
+fprintf('\nSaved: real_Ricker_multihead_pred_vs_truth.png\n');
+
+%% ========================= SAVE =========================================
+save('predictions_real_data_Ricker_multihead.mat', ...
+    'X_in', 'Y_true', 'YPred', 'targetHz', 't', 'dt', ...
+    'tWin', 'mainWin', 'win', 'winMain', ...
+    'rmseW', 'relW', 'ampR', 'corrW', 'corrM', 'corrF', '-v7.3');
+fprintf('Saved: predictions_real_data_Ricker_multihead.mat\n');
+
+%% ============ EXPORT: prediction vector (for FWI / colleague) ===========
+% Builds a drop-in replacement for the input record: [nt x nCol] with the
+% columns in the SAME order as the input file (fileFreqOrder, ascending
+% 500..5500 with the 6400 Hz HF column last).
+%   - LF columns  = NETWORK PREDICTIONS (YPred)
+%   - 6400 Hz col = the original HF input trace (unchanged)
+% Amplitudes are on the same scale as the input record (the inGain round-trip
+% is undone), so this can be ingested/overlaid directly alongside the FD data.
+pred_out = zeros(nt, nCol);
+for c = 1:nCol
+    f = fileFreqOrder(c);
+    if f == 6400
+        pred_out(:, c) = X_in;                    % HF input, unchanged
+    else
+        s = find(targetHz == f, 1);
+        assert(~isempty(s), 'No predicted stage for %d Hz.', f);
+        pred_out(:, c) = YPred(:, s);             % predicted LF band
+    end
+end
+
+% Provenance so the recipient knows what these traces are and their scale
+srcInputFile = inputFile;
+srcModelFile = modelFile;
+
+exportFile = 'pred_traces_Ricker_multihead.mat';
+% -v7 (not -v7.3) so it opens in older MATLAB and in Python (scipy.io.loadmat)
+save(exportFile, 'pred_out', 't', 'dt', 'fileFreqOrder', ...
+     'YPred', 'targetHz', 'X_in', ...
+     'srcInputFile', 'srcModelFile', 'standardizeInput', '-v7');
+
+fprintf('Saved export: %s  [%d x %d]\n', exportFile, size(pred_out,1), size(pred_out,2));
+fprintf('  pred_out columns (Hz): %s\n', sprintf('%d ', fileFreqOrder));
+fprintf('  YPred   columns (Hz): %s\n', sprintf('%d ', targetHz));
+fprintf('  amplitude scale: same as %s\n', srcInputFile);
+
+fprintf('Done.\n');

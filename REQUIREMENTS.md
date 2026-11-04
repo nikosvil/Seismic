@@ -23,16 +23,18 @@ No other toolbox is used. All remaining functions are part of base MATLAB.
 
 ## Python
 
-Python is used only to draw two of the figures. It is not needed to train or
-to evaluate the models.
+Python is used to draw Figs. 2, 3, 5, 6 and 7 and to compute the phase
+diagnostics of Sections 2.8, 4.3 and 5. It is not needed to train or to
+evaluate the models.
 
 - Python 3.9 or newer
 - `numpy`
 - `h5py` (to read MATLAB v7.3 `.mat` files)
 - `matplotlib`
+- `scipy` (the Hilbert transform, used only by `phase_metrics.py`)
 
 ```
-pip install numpy h5py matplotlib
+pip install numpy h5py matplotlib scipy
 ```
 
 ## Hardware and running time
@@ -52,7 +54,7 @@ The models in the paper were trained on one NVIDIA A100-SXM4-80GB GPU.
 The generated dataset is large, because ten target bands are stored for every
 trace at 2001 samples in single precision:
 
-- `dataset_train_val_test_UHS.mat` is about 3.5 GB
+- `dataset_train_val_test_UHRS.mat` is about 3.5 GB
 - the equivalent Ricker dataset is of the same order
 
 Please make sure the disk has room before running the generator.
