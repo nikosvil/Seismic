@@ -28,7 +28,7 @@ k_initial_value = 20;
 g_final_value= 3001;
 %% Time axis
 dt = 1e-5; % sample interval (s)
-nt = 2001; % number of samples per trace (ανά πόσο καταγράφει ο σεισμογράφος)
+nt = 2001; % number of samples per trace (the recording length of the seismograph)
 t = (0:nt-1)'*dt;
 %% Frequencies used
 %freq_list = [500 600 700 800 1100 1500 1900 3000 3800 5000 6400];
