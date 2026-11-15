@@ -1,9 +1,8 @@
-# Progressive multi-output 1-D CNN for low frequency seismic trace reconstruction
+# A progressive multi-output 1-D convolutional network for lower-frequency trace reconstruction of UHRS seismic data
 
 This repository contains the code for the paper:
 
-> N. Vilanakis, N. Economou and A. Vafidis, *A progressive multi-output 1-D
-> convolutional network for low frequency seismic trace reconstruction*,
+> N. Vilanakis, N. Economou and A. Vafidis, *A progressive multi-output 1-D convolutional network for lower-frequency trace reconstruction of UHRS seismic data*,
 > submitted to Computers & Geosciences.
 
 The network reconstructs ten low frequency traces, from 5500 Hz down to 500 Hz,
