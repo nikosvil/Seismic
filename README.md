@@ -172,8 +172,8 @@ If you use this code, please cite the paper:
 ```
 @article{vilanakis2026progressive,
   author  = {Vilanakis, Nikos and Economou, Nikos and Vafidis, Antonis},
-  title   = {A progressive multi-output 1-D convolutional network for low
-             frequency seismic trace reconstruction},
+  title   = {A progressive multi-output 1-D convolutional network for
+             lower-frequency trace reconstruction of UHRS seismic data},
   journal = {Computers \& Geosciences},
   year    = {2026},
   note    = {submitted}

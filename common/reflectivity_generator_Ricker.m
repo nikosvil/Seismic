@@ -1,8 +1,8 @@
 % Title: reflectivity_generator_Ricker.m
 % Author: N. Economou
 %
-% A progressive multi-output 1-D convolutional network for low frequency
-% seismic trace reconstruction
+% A progressive multi-output 1-D convolutional network for lower-frequency
+% trace reconstruction of UHRS seismic data
 % N. D. Vilanakis, N. Economou, A. Vafidis
 % Computers and Geosciences
 %
